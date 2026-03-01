@@ -1,5 +1,6 @@
 using System.IO;
-using System.Text;
+
+using Microsoft.Xna.Framework;
 
 using Terraria;
 using Terraria.ID;
@@ -18,24 +19,70 @@ internal sealed class PlayerInfoHandler
         _versions = versions;
     }
 
-    public void Handle(GetDataEventArgs args, PluginConfig config)
+    public void HandleLate(GetDataEventArgs args, PluginConfig config)
     {
+        if (args.MsgID != PacketTypes.PlayerInfo)
+            return;
+
         int who = args.Msg.whoAmI;
         if (!_versions.IsCrossVersion(who, Main.curRelease))
             return;
 
-        NormalizePlayerInfoPacket(args, who, config);
+        // Original plugin strategy: suppress vanilla PlayerInfo path for all
+        // cross-version clients and apply parsed values manually.
+        args.Handled = true;
 
-        if (!TryGetDifficultyByteIndex(args, out int flagsIndex))
+        int clientRelease = _versions.GetVersion(who);
+        if (!TryParsePlayerInfo(args, clientRelease, out ParsedPlayerInfo info))
+        {
+            if (config.DebugLogging)
+            {
+                TShock.Log.ConsoleInfo(
+                    $"[SkipVersionCheck] DEBUG Failed to parse PlayerInfo for client {who} " +
+                    $"(release {clientRelease}).");
+            }
+
+            AdvanceHandshakeIfNeeded(who, config);
+            return;
+        }
+
+        ApplyParsedPlayerInfo(who, info, config);
+        AdvanceHandshakeIfNeeded(who, config);
+    }
+
+    private void ApplyParsedPlayerInfo(int who, ParsedPlayerInfo info, PluginConfig config)
+    {
+        Player? player = Main.player[who];
+        if (player == null)
             return;
 
-        ref byte difficultyFlags = ref args.Msg.readBuffer[flagsIndex];
+        if (!string.IsNullOrWhiteSpace(info.Name))
+            player.name = info.Name;
 
-        if ((difficultyFlags & VersionCatalog.DifficultyExtraAccessoryFlag) != 0 &&
-            Main.player[who] != null &&
-            !Main.player[who].extraAccessory)
+        player.skinVariant = info.SkinVariant;
+        player.hair = info.Hair;
+        player.hairDye = info.HairDye;
+
+        // Colors in PlayerInfo packet:
+        // hair, skin, eye, shirt, underShirt, pants, shoe.
+        player.hairColor = info.HairColor;
+        player.skinColor = info.SkinColor;
+        player.eyeColor = info.EyeColor;
+        player.shirtColor = info.ShirtColor;
+        player.underShirtColor = info.UnderShirtColor;
+        player.pantsColor = info.PantsColor;
+        player.shoeColor = info.ShoeColor;
+
+        ApplyHideVisualFlags(player, info.HideVisualFlags);
+        player.hideMisc = (BitsByte)info.HideMisc;
+
+        byte difficultyFlags = NormalizeJourneyFlag(info.DifficultyFlags, who, config);
+        player.difficulty = (byte)(difficultyFlags & 0b11);
+
+        bool hasExtraAccessory = (difficultyFlags & VersionCatalog.DifficultyExtraAccessoryFlag) != 0;
+        if (hasExtraAccessory && !player.extraAccessory)
         {
-            Main.player[who].extraAccessory = true;
+            player.extraAccessory = true;
             if (config.DebugLogging)
             {
                 TShock.Log.ConsoleInfo(
@@ -43,282 +90,157 @@ internal sealed class PlayerInfoHandler
             }
         }
 
-        if (!config.SupportJourneyClients)
+        if (config.DebugLogging)
+        {
+            TShock.Log.ConsoleInfo(
+                $"[SkipVersionCheck] DEBUG Applied PlayerInfo for client {who}: " +
+                $"name='{player.name}', skin={player.skinVariant}, hair={player.hair}, " +
+                $"difficulty=0x{difficultyFlags:X2}");
+        }
+    }
+
+    private static void ApplyHideVisualFlags(Player player, ushort hideVisualFlags)
+    {
+        bool[] hide = player.hideVisibleAccessory;
+        if (hide == null || hide.Length == 0)
             return;
+
+        int count = Math.Min(hide.Length, 16);
+        for (int i = 0; i < count; i++)
+        {
+            hide[i] = (hideVisualFlags & (1 << i)) != 0;
+        }
+    }
+
+    private static byte NormalizeJourneyFlag(byte difficultyFlags, int who, PluginConfig config)
+    {
+        if (!config.SupportJourneyClients)
+            return difficultyFlags;
 
         if (Main.GameMode == GameModeID.Creative)
         {
             if ((difficultyFlags & VersionCatalog.DifficultyCreativeFlag) == 0)
             {
-                if (config.DebugLogging)
-                {
-                    TShock.Log.ConsoleInfo(
-                        $"[SkipVersionCheck] Enabled journey mode flag for cross-version client {who}");
-                }
-
                 difficultyFlags |= VersionCatalog.DifficultyCreativeFlag;
                 if (Main.ServerSideCharacter)
                 {
                     NetMessage.SendData((int)PacketTypes.PlayerInfo, who, -1, null, who);
                 }
             }
-            return;
+
+            return difficultyFlags;
         }
 
         if ((difficultyFlags & VersionCatalog.DifficultyCreativeFlag) != 0)
         {
-            if (config.DebugLogging)
-            {
-                TShock.Log.ConsoleInfo(
-                    $"[SkipVersionCheck] Disabled journey mode flag for cross-version client {who}");
-            }
-
             difficultyFlags = (byte)(difficultyFlags & ~VersionCatalog.DifficultyCreativeFlag);
         }
+
+        return difficultyFlags;
     }
 
-    public void HandleLateFallback(GetDataEventArgs args, PluginConfig config)
+    private static void AdvanceHandshakeIfNeeded(int who, PluginConfig config)
     {
-        if (args.MsgID != PacketTypes.PlayerInfo)
+        if (who < 0 || who >= 256)
             return;
 
-        int who = args.Msg.whoAmI;
-        if (!_versions.IsCrossVersion(who, Main.curRelease) || !_versions.UsesLegacyFallback(who))
+        if (Netplay.Clients[who].State != 1)
             return;
 
-        // Legacy connect bypass needs manual PlayerInfo flow.
-        args.Handled = true;
-
-        if (TryGetPlayerName(args, _versions.GetVersion(who), out string name) &&
-            !string.IsNullOrWhiteSpace(name) &&
-            Main.player[who] != null &&
-            string.IsNullOrEmpty(Main.player[who].name))
-        {
-            Main.player[who].name = name;
-            if (config.DebugLogging)
-            {
-                TShock.Log.ConsoleInfo(
-                    $"[SkipVersionCheck] Fixed blank player name -> '{name}' for client {who}");
-            }
-        }
-
-        if (TryGetDifficultyByteIndex(args, out int flagsIndex))
-        {
-            byte difficultyFlags = args.Msg.readBuffer[flagsIndex];
-            bool hasExtraAccessory = (difficultyFlags & VersionCatalog.DifficultyExtraAccessoryFlag) != 0;
-            if (hasExtraAccessory && Main.player[who] != null && !Main.player[who].extraAccessory)
-            {
-                Main.player[who].extraAccessory = true;
-                if (config.DebugLogging)
-                {
-                    TShock.Log.ConsoleInfo(
-                        $"[SkipVersionCheck] Demon Heart extra slot ACTIVATED for client {who} (legacy fallback)");
-                }
-            }
-        }
+        Netplay.Clients[who].State = 2;
+        NetMessage.SendData((int)PacketTypes.WorldInfo, who);
 
         if (config.DebugLogging)
         {
-            string playerName = Main.player[who]?.name ?? "(null)";
             TShock.Log.ConsoleInfo(
-                $"[SkipVersionCheck] DEBUG OnGetDataLate fallback: client={who}, " +
-                $"name='{playerName}', state={Netplay.Clients[who].State}");
-        }
-
-        if (Netplay.Clients[who].State == 1)
-        {
-            Netplay.Clients[who].State = 2;
-            NetMessage.SendData((int)PacketTypes.WorldInfo, who);
-
-            if (config.DebugLogging)
-            {
-                TShock.Log.ConsoleInfo(
-                    $"[SkipVersionCheck] DEBUG Sent WorldInfo(7) to legacy client {who}, " +
-                    $"state now={Netplay.Clients[who].State}");
-            }
+                $"[SkipVersionCheck] DEBUG Sent WorldInfo(7) to client {who}, " +
+                $"state now={Netplay.Clients[who].State}");
         }
     }
 
-    private void NormalizePlayerInfoPacket(GetDataEventArgs args, int who, PluginConfig config)
-    {
-        int clientRelease = _versions.GetVersion(who);
-        if (clientRelease <= 0)
-            return;
-
-        bool clientHasVoiceFields = clientRelease >= VersionCatalog.PlayerInfoVoiceV2Release;
-        bool serverHasVoiceFields = Main.curRelease >= VersionCatalog.PlayerInfoVoiceV2Release;
-        if (clientHasVoiceFields == serverHasVoiceFields)
-            return;
-
-        int payloadStart = args.Index;
-        int payloadLength = args.Length - 1;
-        if (payloadLength < 3 || payloadStart < 0)
-            return;
-
-        const int insertOffset = 2; // after playerId + skinVariant
-        const int voiceFieldsLength = 5; // voiceVariant + voicePitchOffset
-        byte[] translatedPayload;
-
-        if (clientHasVoiceFields && !serverHasVoiceFields)
-        {
-            if (payloadLength <= insertOffset + voiceFieldsLength)
-                return;
-
-            translatedPayload = new byte[payloadLength - voiceFieldsLength];
-            Buffer.BlockCopy(args.Msg.readBuffer, payloadStart, translatedPayload, 0, insertOffset);
-            Buffer.BlockCopy(
-                args.Msg.readBuffer,
-                payloadStart + insertOffset + voiceFieldsLength,
-                translatedPayload,
-                insertOffset,
-                payloadLength - insertOffset - voiceFieldsLength);
-        }
-        else
-        {
-            translatedPayload = new byte[payloadLength + voiceFieldsLength];
-            Buffer.BlockCopy(args.Msg.readBuffer, payloadStart, translatedPayload, 0, insertOffset);
-            translatedPayload[insertOffset] = 0; // voiceVariant
-            Buffer.BlockCopy(
-                args.Msg.readBuffer,
-                payloadStart + insertOffset,
-                translatedPayload,
-                insertOffset + voiceFieldsLength,
-                payloadLength - insertOffset);
-        }
-
-        byte[] translatedPacket = new PacketFactory()
-            .SetType((short)PacketTypes.PlayerInfo)
-            .PackBuffer(translatedPayload)
-            .GetByteData();
-
-        int packetStart = args.Index - 3;
-        if (packetStart < 0 || packetStart + translatedPacket.Length > args.Msg.readBuffer.Length)
-            return;
-
-        Buffer.BlockCopy(translatedPacket, 0, args.Msg.readBuffer, packetStart, translatedPacket.Length);
-        args.Length = translatedPacket.Length - 2;
-
-        if (config.DebugLogging)
-        {
-            string direction = clientHasVoiceFields ? "newer->older" : "older->newer";
-            TShock.Log.ConsoleInfo(
-                $"[SkipVersionCheck] Normalized PlayerInfo ({direction}) for client {who}, " +
-                $"len {payloadLength} -> {translatedPayload.Length}");
-        }
-    }
-
-    private bool TryGetDifficultyByteIndex(GetDataEventArgs args, out int difficultyIndex)
-    {
-        bool serverHasVoiceFields = Main.curRelease >= VersionCatalog.PlayerInfoVoiceV2Release;
-        if (TryGetDifficultyByteIndex(args, serverHasVoiceFields, out difficultyIndex))
-            return true;
-
-        return TryGetDifficultyByteIndex(args, !serverHasVoiceFields, out difficultyIndex);
-    }
-
-    private static bool TryGetDifficultyByteIndex(
+    private static bool TryParsePlayerInfo(
         GetDataEventArgs args,
-        bool hasVoiceFields,
-        out int difficultyIndex)
-    {
-        difficultyIndex = -1;
-
-        if (args.Length <= 1 || args.Index < 0)
-            return false;
-
-        int payloadStart = args.Index;
-        int payloadLength = args.Length - 1;
-        int payloadEndExclusive = payloadStart + payloadLength;
-        if (payloadEndExclusive > args.Msg.readBuffer.Length)
-            return false;
-
-        int offset = payloadStart;
-        int fixedPrefixSize = hasVoiceFields ? 8 : 3;
-        if (offset + fixedPrefixSize > payloadEndExclusive)
-            return false;
-        offset += fixedPrefixSize;
-
-        if (!TryRead7BitEncodedInt(args.Msg.readBuffer, payloadEndExclusive, ref offset, out int nameByteLength))
-            return false;
-
-        if (nameByteLength < 0 || offset + nameByteLength > payloadEndExclusive)
-            return false;
-        offset += nameByteLength;
-
-        const int postNameSize = 1 + 2 + 1; // hairDye + hideVisualFlags + hideMisc
-        if (offset + postNameSize > payloadEndExclusive)
-            return false;
-        offset += postNameSize;
-
-        const int colorsSize = 7 * 3;
-        if (offset + colorsSize >= payloadEndExclusive)
-            return false;
-        offset += colorsSize;
-
-        difficultyIndex = offset;
-        return true;
-    }
-
-    private static bool TryGetPlayerName(GetDataEventArgs args, int clientRelease, out string name)
+        int clientRelease,
+        out ParsedPlayerInfo info)
     {
         bool hasVoiceFields = clientRelease >= VersionCatalog.PlayerInfoVoiceV2Release;
-        if (TryGetPlayerName(args, hasVoiceFields, out name))
+        if (TryParsePlayerInfo(args, hasVoiceFields, out info))
             return true;
 
-        return TryGetPlayerName(args, !hasVoiceFields, out name);
+        return TryParsePlayerInfo(args, !hasVoiceFields, out info);
     }
 
-    private static bool TryGetPlayerName(GetDataEventArgs args, bool hasVoiceFields, out string name)
+    private static bool TryParsePlayerInfo(
+        GetDataEventArgs args,
+        bool hasVoiceFields,
+        out ParsedPlayerInfo info)
     {
-        name = string.Empty;
+        info = default;
 
-        if (args.Length <= 1 || args.Index < 0)
+        if (args.Length <= 1 || args.Index < 0 || args.Index + args.Length > args.Msg.readBuffer.Length)
             return false;
 
-        int payloadStart = args.Index;
-        int payloadLength = args.Length - 1;
-        int payloadEndExclusive = payloadStart + payloadLength;
-        if (payloadEndExclusive > args.Msg.readBuffer.Length)
-            return false;
-
-        int offset = payloadStart;
-        int fixedPrefixSize = hasVoiceFields ? 8 : 3;
-        if (offset + fixedPrefixSize > payloadEndExclusive)
-            return false;
-        offset += fixedPrefixSize;
-
-        if (!TryRead7BitEncodedInt(args.Msg.readBuffer, payloadEndExclusive, ref offset, out int nameByteLength))
-            return false;
-
-        if (nameByteLength < 0 || offset + nameByteLength > payloadEndExclusive)
-            return false;
-
-        name = Encoding.UTF8.GetString(args.Msg.readBuffer, offset, nameByteLength);
-        return true;
-    }
-
-    private static bool TryRead7BitEncodedInt(
-        byte[] buffer,
-        int endExclusive,
-        ref int offset,
-        out int value)
-    {
-        value = 0;
-        int shift = 0;
-
-        for (int i = 0; i < 5; i++)
+        try
         {
-            if (offset >= endExclusive)
-                return false;
+            using var ms = new MemoryStream(args.Msg.readBuffer, args.Index, args.Length - 1);
+            using var br = new BinaryReader(ms);
 
-            byte current = buffer[offset++];
-            value |= (current & 0x7F) << shift;
-            if ((current & 0x80) == 0)
-                return true;
+            info = new ParsedPlayerInfo
+            {
+                PlayerId = br.ReadByte(),
+                SkinVariant = br.ReadByte()
+            };
 
-            shift += 7;
+            if (hasVoiceFields)
+            {
+                _ = br.ReadByte(); // voiceVariant
+                _ = br.ReadSingle(); // voicePitchOffset
+            }
+
+            info.Hair = br.ReadByte();
+            info.Name = br.ReadString();
+            info.HairDye = br.ReadByte();
+            info.HideVisualFlags = br.ReadUInt16();
+            info.HideMisc = br.ReadByte();
+
+            info.HairColor = ReadColor(br);
+            info.SkinColor = ReadColor(br);
+            info.EyeColor = ReadColor(br);
+            info.ShirtColor = ReadColor(br);
+            info.UnderShirtColor = ReadColor(br);
+            info.PantsColor = ReadColor(br);
+            info.ShoeColor = ReadColor(br);
+
+            info.DifficultyFlags = br.ReadByte();
+            return true;
         }
+        catch
+        {
+            return false;
+        }
+    }
 
-        return false;
+    private static Color ReadColor(BinaryReader br)
+    {
+        return new Color(br.ReadByte(), br.ReadByte(), br.ReadByte());
+    }
+
+    private struct ParsedPlayerInfo
+    {
+        public byte PlayerId;
+        public int SkinVariant;
+        public int Hair;
+        public string Name;
+        public byte HairDye;
+        public ushort HideVisualFlags;
+        public byte HideMisc;
+        public Color HairColor;
+        public Color SkinColor;
+        public Color EyeColor;
+        public Color ShirtColor;
+        public Color UnderShirtColor;
+        public Color PantsColor;
+        public Color ShoeColor;
+        public byte DifficultyFlags;
     }
 }

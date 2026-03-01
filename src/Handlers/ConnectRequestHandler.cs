@@ -53,16 +53,6 @@ internal sealed class ConnectRequestHandler
                 $"{clientVersion} ({VersionCatalog.GetLabel(clientRelease)}) connecting to server {Main.curRelease}.");
         }
 
-        if (TryRewriteConnectRequest(args))
-        {
-            if (config.DebugLogging)
-            {
-                TShock.Log.ConsoleInfo(
-                    $"[SkipVersionCheck] DEBUG Rewrote ConnectRequest for client {playerIndex}.");
-            }
-            return;
-        }
-
         _versions.SetLegacyFallback(playerIndex, true);
         HandleLegacyConnectBypass(args, playerIndex, config);
     }
@@ -79,41 +69,57 @@ internal sealed class ConnectRequestHandler
             return false;
         }
 
+        if (TryReadVersionString(args.Msg.readBuffer, args.Index, args.Length, out clientVersion) &&
+            TryExtractRelease(clientVersion, out clientRelease))
+        {
+            return true;
+        }
+
+        // Some server builds expose ConnectRequest with the message type byte still
+        // counted in args.Length; retry by skipping a potential type byte.
+        if (args.Length > 1 &&
+            TryReadVersionString(args.Msg.readBuffer, args.Index + 1, args.Length - 1, out clientVersion) &&
+            TryExtractRelease(clientVersion, out clientRelease))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryReadVersionString(byte[] buffer, int offset, int length, out string version)
+    {
+        version = string.Empty;
+        if (offset < 0 || length <= 0 || offset + length > buffer.Length)
+            return false;
+
         try
         {
-            using var reader = new BinaryReader(
-                new MemoryStream(args.Msg.readBuffer, args.Index, args.Length));
-            clientVersion = reader.ReadString();
+            using var reader = new BinaryReader(new MemoryStream(buffer, offset, length));
+            version = reader.ReadString();
+            return !string.IsNullOrWhiteSpace(version);
         }
         catch
         {
             return false;
         }
+    }
 
+    private static bool TryExtractRelease(string clientVersion, out int clientRelease)
+    {
+        clientRelease = 0;
         if (!clientVersion.StartsWith("Terraria", StringComparison.Ordinal))
             return false;
 
-        return int.TryParse(clientVersion.AsSpan(8), out clientRelease);
-    }
+        ReadOnlySpan<char> span = clientVersion.AsSpan("Terraria".Length);
+        int digitCount = 0;
+        while (digitCount < span.Length && char.IsDigit(span[digitCount]))
+            digitCount++;
 
-    private static bool TryRewriteConnectRequest(GetDataEventArgs args)
-    {
-        int packetStart = args.Index - 3; // [2 bytes length][1 byte type]
-        if (packetStart < 0)
+        if (digitCount == 0)
             return false;
 
-        byte[] packet = new PacketFactory()
-            .SetType((short)PacketTypes.ConnectRequest)
-            .PackString($"Terraria{Main.curRelease}")
-            .GetByteData();
-
-        if (packetStart + packet.Length > args.Msg.readBuffer.Length)
-            return false;
-
-        Buffer.BlockCopy(packet, 0, args.Msg.readBuffer, packetStart, packet.Length);
-        // Length includes packet type + payload (without short length prefix).
-        args.Length = packet.Length - 2;
-        return true;
+        return int.TryParse(span.Slice(0, digitCount), out clientRelease);
     }
 
     private static void HandleLegacyConnectBypass(GetDataEventArgs args, int playerIndex, PluginConfig config)

@@ -1,10 +1,11 @@
-﻿using System.Text;
+using System.Text;
 
 using Terraria;
 using Terraria.ID;
 using TerrariaApi.Server;
 
 using TShockAPI;
+using TShockAPI.Hooks;
 
 namespace SkipVersionCheck;
 
@@ -32,7 +33,7 @@ public sealed class SkipVersionCheck : TerrariaPlugin
     public override string Description =>
         "Allows compatible Terraria clients to connect regardless of exact patch version, " +
         "with protocol translation for cross-version play.";
-    public override Version Version => new(2, 13, 3);
+    public override Version Version => new(2, 13, 5);
 
     public SkipVersionCheck(Main game) : base(game)
     {
@@ -58,11 +59,8 @@ public sealed class SkipVersionCheck : TerrariaPlugin
         ServerApi.Hooks.GamePostInitialize.Register(this, OnPostInitialize);
         ServerApi.Hooks.ServerLeave.Register(this, OnLeave);
         ServerApi.Hooks.NetSendData.Register(this, OnSendData, int.MinValue);
-
-        if (_config.DebugLogging)
-        {
-            ServerApi.Hooks.ServerJoin.Register(this, OnServerJoin, int.MinValue);
-        }
+        ServerApi.Hooks.ServerJoin.Register(this, OnServerJoin, int.MinValue);
+        GeneralHooks.ReloadEvent += OnReload;
 
         Commands.ChatCommands.Add(new Command("skipversioncheck.admin", ReloadCommand, "svcreload")
         {
@@ -83,6 +81,7 @@ public sealed class SkipVersionCheck : TerrariaPlugin
             ServerApi.Hooks.ServerLeave.Deregister(this, OnLeave);
             ServerApi.Hooks.NetSendData.Deregister(this, OnSendData);
             ServerApi.Hooks.ServerJoin.Deregister(this, OnServerJoin);
+            GeneralHooks.ReloadEvent -= OnReload;
 
             Commands.ChatCommands.RemoveAll(c => c.Names.Contains("svcreload"));
         }
@@ -92,12 +91,22 @@ public sealed class SkipVersionCheck : TerrariaPlugin
 
     private void ReloadCommand(CommandArgs args)
     {
-        _config = PluginConfig.Load();
+        ReloadConfiguration();
         args.Player.SendSuccessMessage(
             "[SkipVersionCheck] Configuration reloaded. " +
             $"DebugLogging={_config.DebugLogging}, " +
             $"MinSupportedRelease={_config.MinSupportedRelease}, " +
             $"SupportJourneyClients={_config.SupportJourneyClients}");
+    }
+
+    private void OnReload(ReloadEventArgs args)
+    {
+        ReloadConfiguration();
+    }
+
+    private void ReloadConfiguration()
+    {
+        _config = PluginConfig.Load();
     }
 
     private void OnPostInitialize(EventArgs args)
@@ -194,10 +203,6 @@ public sealed class SkipVersionCheck : TerrariaPlugin
                 _connectRequestHandler.Handle(args, _config);
                 break;
 
-            case PacketTypes.PlayerInfo:
-                _playerInfoHandler.Handle(args, _config);
-                break;
-
             case PacketTypes.PlayerSpawn:
                 _spawnPacketHandler.HandleIncoming(args, _config);
                 break;
@@ -213,7 +218,7 @@ public sealed class SkipVersionCheck : TerrariaPlugin
         if (args.Handled)
             return;
 
-        _playerInfoHandler.HandleLateFallback(args, _config);
+        _playerInfoHandler.HandleLate(args, _config);
     }
 
     // Used by NetModuleHandler for outgoing NetModule filtering.
@@ -228,4 +233,5 @@ public sealed class SkipVersionCheck : TerrariaPlugin
         return VersionCatalog.GetMaxItemsForVersion(clientVersion, _serverMaxItemId);
     }
 }
+
 

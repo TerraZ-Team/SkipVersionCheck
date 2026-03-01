@@ -1,6 +1,5 @@
-using Newtonsoft.Json;
-
 using TShockAPI;
+using TShockAPI.Configuration;
 
 namespace SkipVersionCheck;
 
@@ -14,57 +13,71 @@ public class PluginConfig
     /// Enable verbose debug logging for packet-level diagnostics.
     /// Default: false.
     /// </summary>
-    [JsonProperty("DebugLogging")]
     public bool DebugLogging { get; set; } = false;
 
     /// <summary>
     /// Minimum supported client release number.
     /// Clients below this version will be rejected.
-    /// Default: 315 (v1.4.5.0).
+    /// Default: 269 (v1.4.4.0).
     /// </summary>
-    [JsonProperty("MinSupportedRelease")]
-    public int MinSupportedRelease { get; set; } = 315;
+    public int MinSupportedRelease { get; set; } = 269;
 
     /// <summary>
     /// Enables Journey-mode compatibility adjustments for cross-version clients.
     /// When false, the plugin will not force/clear the Journey bit in PlayerInfo.
     /// Default: true.
     /// </summary>
-    [JsonProperty("SupportJourneyClients")]
     public bool SupportJourneyClients { get; set; } = true;
 
     private static string ConfigPath => Path.Combine(TShock.SavePath, "SkipVersionCheck.json");
+    private static readonly ConfigFile<PluginConfig> ConfigFile = new();
 
     public static PluginConfig Load()
     {
-        if (File.Exists(ConfigPath))
+        try
         {
+            ConfigFile.Read(ConfigPath, out bool incomplete);
+            PluginConfig settings = ConfigFile.Settings ?? new PluginConfig();
+
+            // Defensive bounds for corrupted/manual edits.
+            if (settings.MinSupportedRelease < 1)
+                settings.MinSupportedRelease = 269;
+
+            if (incomplete)
+            {
+                ConfigFile.Settings = settings;
+                ConfigFile.Write(ConfigPath);
+            }
+
+            return settings;
+        }
+        catch (Exception ex)
+        {
+            TShock.Log.ConsoleError(
+                $"[SkipVersionCheck] Error loading config: {ex.Message}. Using defaults.");
+
+            PluginConfig defaults = new();
             try
             {
-                var config = JsonConvert.DeserializeObject<PluginConfig>(
-                    File.ReadAllText(ConfigPath)) ?? new PluginConfig();
-                // Re-save to pick up any new fields
-                config.Save();
-                return config;
+                ConfigFile.Settings = defaults;
+                ConfigFile.Write(ConfigPath);
             }
-            catch (Exception ex)
+            catch (Exception writeEx)
             {
                 TShock.Log.ConsoleError(
-                    $"[SkipVersionCheck] Error loading config: {ex.Message}. Using defaults.");
+                    $"[SkipVersionCheck] Error writing default config: {writeEx.Message}");
             }
-        }
 
-        var defaultConfig = new PluginConfig();
-        defaultConfig.Save();
-        return defaultConfig;
+            return defaults;
+        }
     }
 
     public void Save()
     {
         try
         {
-            File.WriteAllText(ConfigPath,
-                JsonConvert.SerializeObject(this, Formatting.Indented));
+            ConfigFile.Settings = this;
+            ConfigFile.Write(ConfigPath);
         }
         catch (Exception ex)
         {
