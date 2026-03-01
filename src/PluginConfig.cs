@@ -25,6 +25,14 @@ public class PluginConfig
     [JsonProperty("MinSupportedRelease")]
     public int MinSupportedRelease { get; set; } = 315;
 
+    /// <summary>
+    /// Enables Journey-mode compatibility adjustments for cross-version clients.
+    /// When false, the plugin will not force/clear the Journey bit in PlayerInfo.
+    /// Default: true.
+    /// </summary>
+    [JsonProperty("SupportJourneyClients")]
+    public bool SupportJourneyClients { get; set; } = true;
+
     private static string ConfigPath => Path.Combine(TShock.SavePath, "SkipVersionCheck.json");
 
     public static PluginConfig Load()

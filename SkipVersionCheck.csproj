@@ -6,6 +6,6 @@
     <Version>2.11.0</Version>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="TShock" Version="5.9.9" />
+    <PackageReference Include="TShockAPI.TZ" Version="6.0.0.3" />
   </ItemGroup>
 </Project>

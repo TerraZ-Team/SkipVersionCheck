@@ -76,9 +76,12 @@ internal static class NetModuleHandler
                     int maxItems = SkipVersionCheck.Instance?.GetMaxItemsForVersion(clientVersion) ?? int.MaxValue;
                     if (itemNetID > maxItems)
                     {
-                        TShock.Log.ConsoleDebug(
-                            $"[SkipVersionCheck] Filtered NetModule packet (ID={packet.Id}) " +
-                            $"with item {itemNetID} for client {playerId} (max={maxItems})");
+                        if (SkipVersionCheck.Instance?.IsDebugLoggingEnabled ?? false)
+                        {
+                            TShock.Log.ConsoleDebug(
+                                $"[SkipVersionCheck] Filtered NetModule packet (ID={packet.Id}) " +
+                                $"with item {itemNetID} for client {playerId} (max={maxItems})");
+                        }
                         return true;
                     }
                 }
