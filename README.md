@@ -26,25 +26,12 @@ Any Terraria release ≥ 269, including:
 
 | Release | Version   |
 |---------|-----------|
-| 269     | v1.4.4    |
-| 279     | v1.4.4.9  |
 | 315     | v1.4.5.0  |
 | 316     | v1.4.5.3  |
 | 317     | v1.4.5.5  |
 | 318+    | v1.4.5.5+ |
 
 Future versions are automatically accepted — no plugin update required.
-
-## Installation
-
-1. Build the plugin: `dotnet build -c Release`
-2. Copy `bin/Release/net9.0/SkipVersionCheck.dll` into your TShock `ServerPlugins` folder.
-3. Restart the server.
-
-## Requirements
-
-- TShock 5.x / 6.0.0+ (for Terraria 1.4.4+)
-- .NET 9.0
 
 ## Limitations
 
