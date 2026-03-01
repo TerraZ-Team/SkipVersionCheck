@@ -1,9 +1,7 @@
 using System.Runtime.CompilerServices;
-
 using Terraria;
+using Terraria.ID;
 using Terraria.Net;
-
-using TShockAPI;
 
 namespace SkipVersionCheck;
 
@@ -15,10 +13,6 @@ namespace SkipVersionCheck;
 /// </summary>
 internal static class NetModuleHandler
 {
-    /// <summary>
-    /// Replaces the default NetManager.Broadcast to filter per-client.
-    /// Instead of broadcasting to all, we check each client individually.
-    /// </summary>
     internal static void OnBroadcast(
         On.Terraria.Net.NetManager.orig_Broadcast_NetPacket_int orig,
         NetManager self,
@@ -27,19 +21,11 @@ internal static class NetModuleHandler
     {
         for (int i = 0; i < Main.maxPlayers; i++)
         {
-            if (i != ignoreClient && Netplay.Clients[i].IsConnected())
-            {
-                if (!IsInvalidNetPacket(packet, i))
-                {
-                    self.SendData(Netplay.Clients[i].Socket, packet);
-                }
-            }
+            if (i != ignoreClient && Netplay.Clients[i].IsConnected() && !IsInvalidNetPacket(packet, i))
+                self.SendData(Netplay.Clients[i].Socket, packet);
         }
     }
 
-    /// <summary>
-    /// Wraps NetManager.SendToClient to filter packets for specific clients.
-    /// </summary>
     internal static void OnSendToClient(
         On.Terraria.Net.NetManager.orig_SendToClient orig,
         NetManager self,
@@ -47,46 +33,24 @@ internal static class NetModuleHandler
         int playerId)
     {
         if (!IsInvalidNetPacket(packet, playerId))
-        {
             orig(self, packet, playerId);
-        }
     }
 
-    /// <summary>
-    /// Check if a NetPacket contains data that's incompatible with the
-    /// target client's version. Currently checks for unsupported item IDs
-    /// in CreativeUnlocksPlayerReport packets (NetModule ID 5).
-    /// </summary>
     private static bool IsInvalidNetPacket(NetPacket packet, int playerId)
     {
-        // Only filter for cross-version clients
-        int clientVersion = SkipVersionCheck.Instance?.GetClientVersion(playerId) ?? 0;
+        int clientVersion = ClientVersionStore.GetVersion(playerId);
         if (clientVersion <= 0)
-            return false; // same version or not tracked
+            return false;
 
-        switch (packet.Id)
-        {
-            case 5: // CreativeUnlocksPlayerReport — contains item net IDs
-                {
-                    if (packet.Buffer.Data.Length < 5)
-                        return false;
+        if (packet.Id != 5) // CreativeUnlocksPlayerReport
+            return false;
 
-                    var itemNetID = Unsafe.As<byte, short>(ref packet.Buffer.Data[3]);
+        byte[]? data = packet.Buffer?.Data;
+        if (data == null || data.Length < 5)
+            return false;
 
-                    int maxItems = SkipVersionCheck.Instance?.GetMaxItemsForVersion(clientVersion) ?? int.MaxValue;
-                    if (itemNetID > maxItems)
-                    {
-                        if (SkipVersionCheck.Instance?.IsDebugLoggingEnabled ?? false)
-                        {
-                            TShock.Log.ConsoleDebug(
-                                $"[SkipVersionCheck] Filtered NetModule packet (ID={packet.Id}) " +
-                                $"with item {itemNetID} for client {playerId} (max={maxItems})");
-                        }
-                        return true;
-                    }
-                }
-                break;
-        }
-        return false;
+        short itemNetId = Unsafe.As<byte, short>(ref data[3]);
+        int maxItems = VersionCatalog.GetMaxItemsForVersion(clientVersion, ItemID.Count);
+        return itemNetId > maxItems;
     }
 }

@@ -1,21 +1,13 @@
 using Terraria;
 using Terraria.Net.Sockets;
 using TerrariaApi.Server;
-
 using TShockAPI;
 
 namespace SkipVersionCheck;
 
-internal sealed class SpawnPacketHandler
+internal static class SpawnPacketHandler
 {
-    private readonly ClientVersionStore _versions;
-
-    public SpawnPacketHandler(ClientVersionStore versions)
-    {
-        _versions = versions;
-    }
-
-    public void HandleOutgoing(SendDataEventArgs args, PluginConfig config)
+    public static void HandleOutgoing(SendDataEventArgs args)
     {
         int playerIndex = args.number;
         if (playerIndex < 0 || playerIndex >= Main.maxPlayers)
@@ -40,69 +32,58 @@ internal sealed class SpawnPacketHandler
 
         if (remoteClient >= 0 && remoteClient < 256)
         {
-            if (_versions.NeedsSpawnTranslation(remoteClient))
+            if (ClientVersionStore.NeedsSpawnTranslation(remoteClient))
             {
                 SendRawPacket(remoteClient, oldPacket);
                 args.Handled = true;
+            }
+
+            return;
+        }
+
+        for (int i = 0; i < Main.maxPlayers; i++)
+        {
+            if (i == ignoreClient || !Netplay.Clients[i].IsConnected())
+                continue;
+
+            if (ClientVersionStore.NeedsSpawnTranslation(i))
+            {
+                SendRawPacket(i, oldPacket);
                 anyCrossVersion = true;
             }
         }
-        else
+
+        if (!anyCrossVersion)
+            return;
+
+        bool allTargetsAreCrossVersion = true;
+        for (int i = 0; i < Main.maxPlayers; i++)
         {
-            for (int i = 0; i < Main.maxPlayers; i++)
+            if (i == ignoreClient || !Netplay.Clients[i].IsConnected())
+                continue;
+
+            if (!ClientVersionStore.NeedsSpawnTranslation(i))
             {
-                if (i == ignoreClient || !Netplay.Clients[i].IsConnected())
-                    continue;
-
-                if (_versions.NeedsSpawnTranslation(i))
-                {
-                    SendRawPacket(i, oldPacket);
-                    anyCrossVersion = true;
-                }
-            }
-
-            if (anyCrossVersion)
-            {
-                bool allTargetsAreCrossVersion = true;
-                for (int i = 0; i < Main.maxPlayers; i++)
-                {
-                    if (i == ignoreClient || !Netplay.Clients[i].IsConnected())
-                        continue;
-
-                    if (!_versions.NeedsSpawnTranslation(i))
-                    {
-                        allTargetsAreCrossVersion = false;
-                        break;
-                    }
-                }
-
-                if (allTargetsAreCrossVersion)
-                    args.Handled = true;
+                allTargetsAreCrossVersion = false;
+                break;
             }
         }
 
-        if (anyCrossVersion && config.DebugLogging)
-        {
-            TShock.Log.ConsoleInfo(
-                $"[SkipVersionCheck] Translated outgoing spawn packet for player {playerIndex}, " +
-                $"handled={args.Handled}");
-        }
+        if (allTargetsAreCrossVersion)
+            args.Handled = true;
     }
 
-    public void HandleIncoming(GetDataEventArgs args, PluginConfig config)
+    public static void HandleIncoming(GetDataEventArgs args)
     {
         int who = args.Msg.whoAmI;
-        if (!_versions.NeedsSpawnTranslation(who))
+        if (!ClientVersionStore.NeedsSpawnTranslation(who))
             return;
 
         int payloadLength = args.Length - 1;
         const int oldPayloadLength = 10;
         const int newPayloadLength = 15;
 
-        if (payloadLength >= newPayloadLength)
-            return;
-
-        if (payloadLength < oldPayloadLength)
+        if (payloadLength >= newPayloadLength || payloadLength < oldPayloadLength)
             return;
 
         try
@@ -123,18 +104,10 @@ internal sealed class SpawnPacketHandler
             BitConverter.GetBytes(spawnX).CopyTo(args.Msg.readBuffer, offset + 1);
             BitConverter.GetBytes(spawnY).CopyTo(args.Msg.readBuffer, offset + 3);
             BitConverter.GetBytes(respawnTimer).CopyTo(args.Msg.readBuffer, offset + 5);
-            BitConverter.GetBytes((short)0).CopyTo(args.Msg.readBuffer, offset + 9);  // numberOfDeathsPVE
+            BitConverter.GetBytes((short)0).CopyTo(args.Msg.readBuffer, offset + 9); // numberOfDeathsPVE
             BitConverter.GetBytes((short)0).CopyTo(args.Msg.readBuffer, offset + 11); // numberOfDeathsPVP
             args.Msg.readBuffer[offset + 13] = team;
             args.Msg.readBuffer[offset + 14] = spawnContext;
-
-            if (config.DebugLogging)
-            {
-                TShock.Log.ConsoleInfo(
-                    $"[SkipVersionCheck] Padded incoming spawn packet from client {who}: " +
-                    $"spawn=({spawnX},{spawnY}), respawnTimer={respawnTimer}, " +
-                    $"team={team}, context={spawnContext}");
-            }
         }
         catch (Exception ex)
         {

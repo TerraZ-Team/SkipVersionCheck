@@ -2,68 +2,68 @@ using Terraria;
 
 namespace SkipVersionCheck;
 
-internal sealed class ClientVersionStore
+internal static class ClientVersionStore
 {
     // -1 = same as server, 0 = empty slot / unknown.
-    private readonly int[] _versions = new int[Main.maxPlayers + 1];
-    private readonly bool[] _legacyFallback = new bool[Main.maxPlayers + 1];
+    private static readonly int[] Versions = new int[Main.maxPlayers + 1];
+    private static readonly bool[] LegacyFallback = new bool[Main.maxPlayers + 1];
 
-    public int GetVersion(int playerIndex)
+    public static int GetVersion(int playerIndex)
     {
         return IsValidPlayerIndex(playerIndex)
-            ? _versions[playerIndex]
+            ? Versions[playerIndex]
             : 0;
     }
 
-    public void SetVersion(int playerIndex, int release)
+    public static void SetVersion(int playerIndex, int release)
     {
         if (!IsValidPlayerIndex(playerIndex))
             return;
 
-        _versions[playerIndex] = release;
+        Versions[playerIndex] = release;
     }
 
-    public void MarkSameAsServer(int playerIndex)
+    public static void MarkSameAsServer(int playerIndex)
     {
         if (!IsValidPlayerIndex(playerIndex))
             return;
 
-        _versions[playerIndex] = -1;
+        Versions[playerIndex] = -1;
     }
 
-    public void SetLegacyFallback(int playerIndex, bool enabled)
+    public static void SetLegacyFallback(int playerIndex, bool enabled)
     {
         if (!IsValidPlayerIndex(playerIndex))
             return;
 
-        _legacyFallback[playerIndex] = enabled;
+        LegacyFallback[playerIndex] = enabled;
     }
 
-    public bool UsesLegacyFallback(int playerIndex)
+    public static bool UsesLegacyFallback(int playerIndex)
     {
-        return IsValidPlayerIndex(playerIndex) && _legacyFallback[playerIndex];
+        return IsValidPlayerIndex(playerIndex) && LegacyFallback[playerIndex];
     }
 
-    public bool IsCrossVersion(int playerIndex, int serverRelease)
+    public static bool IsCrossVersion(int playerIndex, int serverRelease)
     {
         int release = GetVersion(playerIndex);
         return release > 0 && release != serverRelease;
     }
 
-    public bool NeedsSpawnTranslation(int playerIndex)
+    public static bool NeedsSpawnTranslation(int playerIndex)
     {
         int release = GetVersion(playerIndex);
         return release > 0 && release < VersionCatalog.SpawnPacketV2Release;
     }
 
-    public int Clear(int playerIndex)
+    public static int Clear(int playerIndex)
     {
         if (!IsValidPlayerIndex(playerIndex))
             return 0;
 
-        int previousVersion = _versions[playerIndex];
-        _versions[playerIndex] = 0;
-        _legacyFallback[playerIndex] = false;
+        int previousVersion = Versions[playerIndex];
+        Versions[playerIndex] = 0;
+        LegacyFallback[playerIndex] = false;
         return previousVersion;
     }
 

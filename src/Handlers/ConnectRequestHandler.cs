@@ -1,60 +1,45 @@
 using System.IO;
-
 using Terraria;
 using TerrariaApi.Server;
-
 using TShockAPI;
+using SkipVersionCheck.Configuration;
 
 namespace SkipVersionCheck;
 
-internal sealed class ConnectRequestHandler
+internal static class ConnectRequestHandler
 {
-    private readonly ClientVersionStore _versions;
-
-    public ConnectRequestHandler(ClientVersionStore versions)
-    {
-        _versions = versions;
-    }
-
-    public void Handle(GetDataEventArgs args, PluginConfig config)
+    public static void Handle(GetDataEventArgs args, ConfigSettings config)
     {
         int playerIndex = args.Msg.whoAmI;
         if (playerIndex < 0 || playerIndex >= Main.maxPlayers + 1)
             return;
 
-        _versions.Clear(playerIndex);
+        ClientVersionStore.Clear(playerIndex);
 
         if (!TryReadClientRelease(args, out string clientVersion, out int clientRelease))
             return;
 
-        if (clientRelease < config.MinSupportedRelease)
-        {
-            if (config.DebugLogging)
-            {
-                TShock.Log.ConsoleInfo(
-                    $"[SkipVersionCheck] Client (index {playerIndex}) version " +
-                    $"{clientVersion} (release {clientRelease}) below minimum {config.MinSupportedRelease}.");
-            }
-            return;
-        }
-
-        _versions.SetVersion(playerIndex, clientRelease);
-
-        if (clientRelease == Main.curRelease)
-        {
-            _versions.MarkSameAsServer(playerIndex);
-            return;
-        }
-
         if (config.DebugLogging)
         {
             TShock.Log.ConsoleInfo(
-                $"[SkipVersionCheck] Cross-version client (index {playerIndex}) " +
-                $"{clientVersion} ({VersionCatalog.GetLabel(clientRelease)}) connecting to server {Main.curRelease}.");
+                $"[SkipVersionCheck] Client {playerIndex} version: {clientVersion} (release {clientRelease}), server release: {Main.curRelease}");
         }
 
-        _versions.SetLegacyFallback(playerIndex, true);
-        HandleLegacyConnectBypass(args, playerIndex, config);
+        if (clientRelease < config.MinSupportedRelease)
+            return;
+
+        ClientVersionStore.SetVersion(playerIndex, clientRelease);
+
+        if (clientRelease == Main.curRelease)
+        {
+            ClientVersionStore.MarkSameAsServer(playerIndex);
+        }
+        else
+        {
+            ClientVersionStore.SetLegacyFallback(playerIndex, true);
+        }
+
+        HandleLegacyConnectBypass(args, playerIndex);
     }
 
     private static bool TryReadClientRelease(GetDataEventArgs args, out string clientVersion, out int clientRelease)
@@ -95,7 +80,7 @@ internal sealed class ConnectRequestHandler
 
         try
         {
-            using var reader = new BinaryReader(new MemoryStream(buffer, offset, length));
+            using BinaryReader reader = new BinaryReader(new MemoryStream(buffer, offset, length));
             version = reader.ReadString();
             return !string.IsNullOrWhiteSpace(version);
         }
@@ -122,18 +107,10 @@ internal sealed class ConnectRequestHandler
         return int.TryParse(span.Slice(0, digitCount), out clientRelease);
     }
 
-    private static void HandleLegacyConnectBypass(GetDataEventArgs args, int playerIndex, PluginConfig config)
+    private static void HandleLegacyConnectBypass(GetDataEventArgs args, int playerIndex)
     {
         Netplay.Clients[playerIndex].State = 1;
         NetMessage.SendData((int)PacketTypes.ContinueConnecting, playerIndex, -1, null, playerIndex);
-
-        if (config.DebugLogging)
-        {
-            TShock.Log.ConsoleInfo(
-                $"[SkipVersionCheck] DEBUG Legacy ContinueConnecting(3) sent to client {playerIndex}, " +
-                $"state={Netplay.Clients[playerIndex].State}");
-        }
-
         args.Handled = true;
     }
 }

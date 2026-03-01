@@ -1,56 +1,40 @@
 using System.IO;
-
 using Microsoft.Xna.Framework;
-
 using Terraria;
 using Terraria.ID;
 using TerrariaApi.Server;
-
 using TShockAPI;
+using SkipVersionCheck.Configuration;
 
 namespace SkipVersionCheck;
 
-internal sealed class PlayerInfoHandler
+internal static class PlayerInfoHandler
 {
-    private readonly ClientVersionStore _versions;
-
-    public PlayerInfoHandler(ClientVersionStore versions)
-    {
-        _versions = versions;
-    }
-
-    public void HandleLate(GetDataEventArgs args, PluginConfig config)
+    public static void Handle(GetDataEventArgs args, ConfigSettings config)
     {
         if (args.MsgID != PacketTypes.PlayerInfo)
             return;
 
         int who = args.Msg.whoAmI;
-        if (!_versions.IsCrossVersion(who, Main.curRelease))
+        if (!ClientVersionStore.IsCrossVersion(who, Main.curRelease))
             return;
 
-        // Original plugin strategy: suppress vanilla PlayerInfo path for all
-        // cross-version clients and apply parsed values manually.
+        // Original strategy: suppress vanilla PlayerInfo path for all cross-version clients
+        // and apply parsed values manually, including appearance data.
         args.Handled = true;
 
-        int clientRelease = _versions.GetVersion(who);
+        int clientRelease = ClientVersionStore.GetVersion(who);
         if (!TryParsePlayerInfo(args, clientRelease, out ParsedPlayerInfo info))
         {
-            if (config.DebugLogging)
-            {
-                TShock.Log.ConsoleInfo(
-                    $"[SkipVersionCheck] DEBUG Failed to parse PlayerInfo for client {who} " +
-                    $"(release {clientRelease}).");
-            }
-
-            AdvanceHandshakeIfNeeded(who, config);
+            AdvanceHandshakeIfNeeded(who);
             return;
         }
 
         ApplyParsedPlayerInfo(who, info, config);
-        AdvanceHandshakeIfNeeded(who, config);
+        AdvanceHandshakeIfNeeded(who);
     }
 
-    private void ApplyParsedPlayerInfo(int who, ParsedPlayerInfo info, PluginConfig config)
+    private static void ApplyParsedPlayerInfo(int who, ParsedPlayerInfo info, ConfigSettings config)
     {
         Player? player = Main.player[who];
         if (player == null)
@@ -76,26 +60,19 @@ internal sealed class PlayerInfoHandler
         ApplyHideVisualFlags(player, info.HideVisualFlags);
         player.hideMisc = (BitsByte)info.HideMisc;
 
-        byte difficultyFlags = NormalizeJourneyFlag(info.DifficultyFlags, who, config);
+        byte difficultyFlags = NormalizeJourneyFlag(info.DifficultyFlags, who, config, out bool journeyChanged);
         player.difficulty = (byte)(difficultyFlags & 0b11);
 
         bool hasExtraAccessory = (difficultyFlags & VersionCatalog.DifficultyExtraAccessoryFlag) != 0;
         if (hasExtraAccessory && !player.extraAccessory)
-        {
             player.extraAccessory = true;
-            if (config.DebugLogging)
-            {
-                TShock.Log.ConsoleInfo(
-                    $"[SkipVersionCheck] Demon Heart extra slot ACTIVATED for client {who}");
-            }
-        }
 
         if (config.DebugLogging)
         {
+            bool journeyEnabled = (difficultyFlags & VersionCatalog.DifficultyCreativeFlag) != 0;
+            string journeyAdjustment = journeyChanged ? ", journeyAdjusted=true" : string.Empty;
             TShock.Log.ConsoleInfo(
-                $"[SkipVersionCheck] DEBUG Applied PlayerInfo for client {who}: " +
-                $"name='{player.name}', skin={player.skinVariant}, hair={player.hair}, " +
-                $"difficulty=0x{difficultyFlags:X2}");
+                $"[SkipVersionCheck] Client {who} PlayerInfo: extraSlot={hasExtraAccessory}, journey={journeyEnabled}, diff=0x{difficultyFlags:X2}{journeyAdjustment}");
         }
     }
 
@@ -112,8 +89,9 @@ internal sealed class PlayerInfoHandler
         }
     }
 
-    private static byte NormalizeJourneyFlag(byte difficultyFlags, int who, PluginConfig config)
+    private static byte NormalizeJourneyFlag(byte difficultyFlags, int who, ConfigSettings config, out bool changed)
     {
+        changed = false;
         if (!config.SupportJourneyClients)
             return difficultyFlags;
 
@@ -122,10 +100,9 @@ internal sealed class PlayerInfoHandler
             if ((difficultyFlags & VersionCatalog.DifficultyCreativeFlag) == 0)
             {
                 difficultyFlags |= VersionCatalog.DifficultyCreativeFlag;
+                changed = true;
                 if (Main.ServerSideCharacter)
-                {
                     NetMessage.SendData((int)PacketTypes.PlayerInfo, who, -1, null, who);
-                }
             }
 
             return difficultyFlags;
@@ -134,12 +111,13 @@ internal sealed class PlayerInfoHandler
         if ((difficultyFlags & VersionCatalog.DifficultyCreativeFlag) != 0)
         {
             difficultyFlags = (byte)(difficultyFlags & ~VersionCatalog.DifficultyCreativeFlag);
+            changed = true;
         }
 
         return difficultyFlags;
     }
 
-    private static void AdvanceHandshakeIfNeeded(int who, PluginConfig config)
+    private static void AdvanceHandshakeIfNeeded(int who)
     {
         if (who < 0 || who >= 256)
             return;
@@ -149,13 +127,6 @@ internal sealed class PlayerInfoHandler
 
         Netplay.Clients[who].State = 2;
         NetMessage.SendData((int)PacketTypes.WorldInfo, who);
-
-        if (config.DebugLogging)
-        {
-            TShock.Log.ConsoleInfo(
-                $"[SkipVersionCheck] DEBUG Sent WorldInfo(7) to client {who}, " +
-                $"state now={Netplay.Clients[who].State}");
-        }
     }
 
     private static bool TryParsePlayerInfo(
@@ -182,8 +153,8 @@ internal sealed class PlayerInfoHandler
 
         try
         {
-            using var ms = new MemoryStream(args.Msg.readBuffer, args.Index, args.Length - 1);
-            using var br = new BinaryReader(ms);
+            using MemoryStream ms = new MemoryStream(args.Msg.readBuffer, args.Index, args.Length - 1);
+            using BinaryReader br = new BinaryReader(ms);
 
             info = new ParsedPlayerInfo
             {
