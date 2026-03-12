@@ -16,20 +16,26 @@ internal static class PlayerInfoHandler
             return;
 
         int who = args.Msg.whoAmI;
-        if (!ClientVersionStore.IsCrossVersion(who, Main.curRelease))
+        int clientRelease = ResolveTrackedRelease(who);
+        if (clientRelease <= 0)
             return;
 
-        // Original strategy: suppress vanilla PlayerInfo path for all cross-version clients
-        // and apply parsed values manually, including appearance data.
-        args.Handled = true;
+        bool isCrossVersion = clientRelease != Main.curRelease;
+        if (!isCrossVersion && !config.SupportJourneyClients)
+            return;
 
-        int clientRelease = ClientVersionStore.GetVersion(who);
         if (!TryParsePlayerInfo(args, clientRelease, out ParsedPlayerInfo info))
         {
-            AdvanceHandshakeIfNeeded(who);
+            if (isCrossVersion)
+            {
+                args.Handled = true;
+                AdvanceHandshakeIfNeeded(who);
+            }
+
             return;
         }
 
+        args.Handled = true;
         ApplyParsedPlayerInfo(who, info, config);
         AdvanceHandshakeIfNeeded(who);
     }
@@ -63,11 +69,10 @@ internal static class PlayerInfoHandler
         player.hideMisc = (BitsByte)info.HideMisc;
 
         byte difficultyFlags = NormalizeJourneyFlag(info.DifficultyFlags, who, config, out bool journeyChanged);
-        player.difficulty = (byte)(difficultyFlags & 0b11);
+        player.difficulty = GetDifficulty(difficultyFlags);
 
         bool hasExtraAccessory = ((PlayerInfoDifficultyFlags)difficultyFlags & PlayerInfoDifficultyFlags.ExtraAccessory) != 0;
-        if (hasExtraAccessory && !player.extraAccessory)
-            player.extraAccessory = true;
+        player.extraAccessory = hasExtraAccessory;
 
         if (config.DebugLogging)
         {
@@ -89,6 +94,25 @@ internal static class PlayerInfoHandler
         {
             hide[i] = (hideVisualFlags & (1 << i)) != 0;
         }
+    }
+
+    private static int ResolveTrackedRelease(int who)
+    {
+        int trackedRelease = ClientVersionStore.GetVersion(who);
+        return trackedRelease switch
+        {
+            > 0 => trackedRelease,
+            -1 => Main.curRelease,
+            _ => 0
+        };
+    }
+
+    private static byte GetDifficulty(byte difficultyFlags)
+    {
+        PlayerInfoDifficultyFlags flags = (PlayerInfoDifficultyFlags)difficultyFlags;
+        return (flags & PlayerInfoDifficultyFlags.Creative) != 0
+            ? (byte)3
+            : (byte)(difficultyFlags & 0b11);
     }
 
     private static byte NormalizeJourneyFlag(byte difficultyFlags, int who, ConfigSettings config, out bool changed)
