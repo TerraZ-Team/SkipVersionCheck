@@ -53,7 +53,7 @@ internal static class ClientVersionStore
     public static bool NeedsSpawnTranslation(int playerIndex)
     {
         int release = GetVersion(playerIndex);
-        return release > 0 && release < VersionCatalog.SpawnPacketV2Release;
+        return release > 0 && !VersionCatalog.Supports(release, ClientFeatures.SpawnPacketV2);
     }
 
     public static int Clear(int playerIndex)

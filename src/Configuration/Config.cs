@@ -5,7 +5,7 @@ namespace SkipVersionCheck.Configuration;
 
 internal static class Config
 {
-    private static readonly string ConfigPath = Path.Combine(TShock.SavePath, "SkipVersionCheck.json");
+    private static string ConfigPath => Path.Combine(TShock.SavePath ?? "tshock", "SkipVersionCheck.json");
     private static readonly ConfigFile<ConfigSettings> ConfigFile = new();
 
     public static ConfigSettings Settings => ConfigFile.Settings;

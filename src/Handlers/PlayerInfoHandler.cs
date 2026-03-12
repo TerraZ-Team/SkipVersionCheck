@@ -44,6 +44,8 @@ internal static class PlayerInfoHandler
             player.name = info.Name;
 
         player.skinVariant = info.SkinVariant;
+        player.voiceVariant = info.VoiceVariant;
+        player.voicePitchOffset = info.VoicePitchOffset;
         player.hair = info.Hair;
         player.hairDye = info.HairDye;
 
@@ -63,13 +65,13 @@ internal static class PlayerInfoHandler
         byte difficultyFlags = NormalizeJourneyFlag(info.DifficultyFlags, who, config, out bool journeyChanged);
         player.difficulty = (byte)(difficultyFlags & 0b11);
 
-        bool hasExtraAccessory = (difficultyFlags & VersionCatalog.DifficultyExtraAccessoryFlag) != 0;
+        bool hasExtraAccessory = ((PlayerInfoDifficultyFlags)difficultyFlags & PlayerInfoDifficultyFlags.ExtraAccessory) != 0;
         if (hasExtraAccessory && !player.extraAccessory)
             player.extraAccessory = true;
 
         if (config.DebugLogging)
         {
-            bool journeyEnabled = (difficultyFlags & VersionCatalog.DifficultyCreativeFlag) != 0;
+            bool journeyEnabled = ((PlayerInfoDifficultyFlags)difficultyFlags & PlayerInfoDifficultyFlags.Creative) != 0;
             string journeyAdjustment = journeyChanged ? ", journeyAdjusted=true" : string.Empty;
             TShock.Log.ConsoleInfo(
                 $"[SkipVersionCheck] Client {who} PlayerInfo: extraSlot={hasExtraAccessory}, journey={journeyEnabled}, diff=0x{difficultyFlags:X2}{journeyAdjustment}");
@@ -95,26 +97,28 @@ internal static class PlayerInfoHandler
         if (!config.SupportJourneyClients)
             return difficultyFlags;
 
+        PlayerInfoDifficultyFlags flags = (PlayerInfoDifficultyFlags)difficultyFlags;
+
         if (Main.GameMode == GameModeID.Creative)
         {
-            if ((difficultyFlags & VersionCatalog.DifficultyCreativeFlag) == 0)
+            if ((flags & PlayerInfoDifficultyFlags.Creative) == 0)
             {
-                difficultyFlags |= VersionCatalog.DifficultyCreativeFlag;
+                flags |= PlayerInfoDifficultyFlags.Creative;
                 changed = true;
                 if (Main.ServerSideCharacter)
                     NetMessage.SendData((int)PacketTypes.PlayerInfo, who, -1, null, who);
             }
 
-            return difficultyFlags;
+            return (byte)flags;
         }
 
-        if ((difficultyFlags & VersionCatalog.DifficultyCreativeFlag) != 0)
+        if ((flags & PlayerInfoDifficultyFlags.Creative) != 0)
         {
-            difficultyFlags = (byte)(difficultyFlags & ~VersionCatalog.DifficultyCreativeFlag);
+            flags &= ~PlayerInfoDifficultyFlags.Creative;
             changed = true;
         }
 
-        return difficultyFlags;
+        return (byte)flags;
     }
 
     private static void AdvanceHandshakeIfNeeded(int who)
@@ -134,7 +138,7 @@ internal static class PlayerInfoHandler
         int clientRelease,
         out ParsedPlayerInfo info)
     {
-        bool hasVoiceFields = clientRelease >= VersionCatalog.PlayerInfoVoiceV2Release;
+        bool hasVoiceFields = VersionCatalog.Supports(clientRelease, ClientFeatures.PlayerInfoVoiceV2);
         if (TryParsePlayerInfo(args, hasVoiceFields, out info))
             return true;
 
@@ -164,8 +168,8 @@ internal static class PlayerInfoHandler
 
             if (hasVoiceFields)
             {
-                _ = br.ReadByte(); // voiceVariant
-                _ = br.ReadSingle(); // voicePitchOffset
+                info.VoiceVariant = br.ReadByte();
+                info.VoicePitchOffset = br.ReadSingle();
             }
 
             info.Hair = br.ReadByte();
@@ -200,6 +204,8 @@ internal static class PlayerInfoHandler
     {
         public byte PlayerId;
         public int SkinVariant;
+        public byte VoiceVariant;
+        public float VoicePitchOffset;
         public int Hair;
         public string Name;
         public byte HairDye;
@@ -214,4 +220,12 @@ internal static class PlayerInfoHandler
         public Color ShoeColor;
         public byte DifficultyFlags;
     }
+}
+
+[Flags]
+internal enum PlayerInfoDifficultyFlags : byte
+{
+    None = 0,
+    ExtraAccessory = 1 << 2,
+    Creative = 1 << 3,
 }

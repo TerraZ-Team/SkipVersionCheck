@@ -18,7 +18,7 @@ public sealed class SkipVersionCheck : TerrariaPlugin
 
     public SkipVersionCheck(Main game) : base(game)
     {
-        Order = -1;
+        Order = 1;
         Instance = this;
     }
 
