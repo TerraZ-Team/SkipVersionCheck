@@ -69,7 +69,7 @@ internal static class PlayerInfoHandler
         player.hideMisc = (BitsByte)info.HideMisc;
 
         byte difficultyFlags = NormalizeJourneyFlag(info.DifficultyFlags, who, config, out bool journeyChanged);
-        player.difficulty = GetDifficulty(difficultyFlags);
+        //player.difficulty = GetDifficulty(difficultyFlags);
 
         bool hasExtraAccessory = ((PlayerInfoDifficultyFlags)difficultyFlags & PlayerInfoDifficultyFlags.ExtraAccessory) != 0;
         player.extraAccessory = hasExtraAccessory;
