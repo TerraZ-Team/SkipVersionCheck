@@ -109,7 +109,7 @@ internal static class ConnectRequestHandler
 
     private static void HandleLegacyConnectBypass(GetDataEventArgs args, int playerIndex)
     {
-        Netplay.Clients[playerIndex].State = 1;
+        Netplay.Clients[playerIndex].State = (int)ConnectionState.AssigningPlayerSlot;
         NetMessage.SendData((int)PacketTypes.ContinueConnecting, playerIndex, -1, null, playerIndex);
         args.Handled = true;
     }

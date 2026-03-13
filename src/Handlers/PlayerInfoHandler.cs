@@ -153,7 +153,7 @@ internal static class PlayerInfoHandler
         if (Netplay.Clients[who].State != 1)
             return;
 
-        Netplay.Clients[who].State = 2;
+        //Netplay.Clients[who].State = (int)ConnectionState.AwaitingPlayerInfo;
         NetMessage.SendData((int)PacketTypes.WorldInfo, who);
     }
 
