@@ -17,8 +17,10 @@ internal static class ConnectRequestHandler
         ClientVersionStore.Clear(playerIndex);
 
         if (!TryReadClientRelease(args, out string clientVersion, out int clientRelease))
+        {
+            args.Handled = true;
             return;
-
+        }
         if (config.DebugLogging)
         {
             TShock.Log.ConsoleInfo(
